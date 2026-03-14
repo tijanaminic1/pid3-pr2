@@ -436,6 +436,50 @@ final class EntryReaderTest {
     }
   }
 
+  /** Test multiline comment support (HTML-style). */
+  @Test
+  void testMultilineComment() throws IOException {
+    // Comment starts with <!-- at start of line, ends with --> at start of line
+    String content = "line1\n<!--\ncomment middle\n-->\nline2\n";
+    try (EntryReader reader =
+        new EntryReader(new StringReader(content), "test", false, null, null, "^<!--", "^-->")) {
+      assertEquals("line1", reader.readLine());
+      assertEquals("line2", reader.readLine());
+      assertNull(reader.readLine());
+    }
+  }
+
+  /** Test multiline comment on a single line (start and end on same line). */
+  @Test
+  void testMultilineCommentSingleLine() throws IOException {
+    // When both start and end are on the same line, entire line is treated as a comment
+    String content = "line1\n<!-- single line comment -->\nline2\n";
+    try (EntryReader reader =
+        new EntryReader(new StringReader(content), "test", false, null, null, "^<!--", "-->$")) {
+      assertEquals("line1", reader.readLine());
+      assertEquals("line2", reader.readLine());
+      assertNull(reader.readLine());
+    }
+  }
+
+  /** Test that multiline comments inside fenced code blocks are not treated as comments. */
+  @Test
+  void testMultilineCommentInsideFencedCodeBlock() throws IOException {
+    // Inside a fenced code block, <!-- --> should not be treated as comments
+    String content = "line1\n```sh\n<!--\nnot a comment\n-->\n```\nline2\n";
+    try (EntryReader reader =
+        new EntryReader(new StringReader(content), "test", false, null, null, "^<!--", "^-->")) {
+      assertEquals("line1", reader.readLine());
+      assertEquals("```sh", reader.readLine());
+      assertEquals("<!--", reader.readLine());
+      assertEquals("not a comment", reader.readLine());
+      assertEquals("-->", reader.readLine());
+      assertEquals("```", reader.readLine());
+      assertEquals("line2", reader.readLine());
+      assertNull(reader.readLine());
+    }
+  }
+
   /** Test Entry metadata (filename and lineNumber). */
   @Test
   void testEntryMetadata() throws IOException {

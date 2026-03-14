@@ -180,7 +180,9 @@ public class EntryReader extends LineNumberReader implements Iterable<String>, I
         filename,
         twoBlankLines,
         commentRegexString,
-        includeRegexString);
+        includeRegexString,
+        multilineCommentStart,
+        multilineCommentEnd);
   }
 
   /**
@@ -462,7 +464,13 @@ public class EntryReader extends LineNumberReader implements Iterable<String>, I
       @Nullable @Regex String multilineCommentEnd)
       throws IOException {
     this(
-        FilesPlume.newFileReader(path), path.toString(), twoBlankLines, commentRegex, includeRegex);
+        FilesPlume.newFileReader(path),
+        path.toString(),
+        twoBlankLines,
+        commentRegex,
+        includeRegex,
+        multilineCommentStart,
+        multilineCommentEnd);
   }
 
   /**
@@ -557,7 +565,13 @@ public class EntryReader extends LineNumberReader implements Iterable<String>, I
       @Nullable @Regex String multilineCommentEnd)
       throws IOException {
     this(
-        FilesPlume.newFileReader(file), file.toString(), twoBlankLines, commentRegex, includeRegex);
+        FilesPlume.newFileReader(file),
+        file.toString(),
+        twoBlankLines,
+        commentRegex,
+        includeRegex,
+        multilineCommentStart,
+        multilineCommentEnd);
   }
 
   /**
@@ -652,7 +666,13 @@ public class EntryReader extends LineNumberReader implements Iterable<String>, I
       @Nullable @Regex String multilineCommentStart,
       @Nullable @Regex String multilineCommentEnd)
       throws IOException {
-    this(new File(filename), twoBlankLines, commentRegex, includeRegex);
+    this(
+        new File(filename),
+        twoBlankLines,
+        commentRegex,
+        includeRegex,
+        multilineCommentStart,
+        multilineCommentEnd);
   }
 
   /**
@@ -847,23 +867,46 @@ public class EntryReader extends LineNumberReader implements Iterable<String>, I
     // Lines containing multilineCommentStart and multilineCommentEnd
     // may appear on the same line, but must not contain any non-comment code.
     // All lines within a multiline comment are ignored.
-    if (inMultilineComment) {
-      if (multilineCommentEnd != null
-          && line != null
-          && line.trim().endsWith(multilineCommentEnd.toString())) {
-        inMultilineComment = false;
+    while (line != null) {
+      if (inMultilineComment) {
+        if (multilineCommentEnd != null) {
+          Matcher endMatcher = multilineCommentEnd.matcher(line.trim());
+          if (endMatcher.find()) {
+            inMultilineComment = false;
+          }
+        }
+        line = getNextLine();
+        if (line != null && line.trim().startsWith("```")) {
+          inFencedCodeBlock = !inFencedCodeBlock;
+          return line;
+        }
+        if (inFencedCodeBlock) {
+          return line;
+        }
+        continue;
       }
-      return "";
-    }
-    if (multilineCommentStart != null
-        && line != null
-        && line.trim().startsWith(multilineCommentStart.toString())) {
-      inMultilineComment = true; // NOPMD
-
-      if (multilineCommentEnd != null && line.trim().endsWith(multilineCommentEnd.toString())) {
-        inMultilineComment = false;
+      if (multilineCommentStart != null) {
+        Matcher startMatcher = multilineCommentStart.matcher(line.trim());
+        if (startMatcher.find()) {
+          inMultilineComment = true;
+          if (multilineCommentEnd != null) {
+            Matcher endMatcher = multilineCommentEnd.matcher(line.trim());
+            if (endMatcher.find()) {
+              inMultilineComment = false;
+            }
+          }
+          line = getNextLine();
+          if (line != null && line.trim().startsWith("```")) {
+            inFencedCodeBlock = !inFencedCodeBlock;
+            return line;
+          }
+          if (inFencedCodeBlock) {
+            return line;
+          }
+          continue;
+        }
       }
-      return "";
+      break;
     }
 
     if (commentRegex != null) {
@@ -1186,52 +1229,70 @@ public class EntryReader extends LineNumberReader implements Iterable<String>, I
   /**
    * Simple usage example.
    *
-   * @param args command-line arguments: filename [commentRegex [includeRegex]]
+   * @param args command-line arguments: filename [--comment-line-re=string]
+   *     [--comment-multiline-start-re=string] [--comment-multiline-end-re=string]
    * @throws IOException if there is a problem reading a file
    */
   public static void main(String[] args) throws IOException {
 
-    if (args.length < 1 || args.length > 3) {
+    String filename = null;
+    String commentLineRe = null;
+    String commentMultilineStartRe = null;
+    String commentMultilineEndRe = null;
+
+    for (String arg : args) {
+      if (arg.startsWith("--comment-line-re=")) {
+        commentLineRe = arg.substring("--comment-line-re=".length());
+      } else if (arg.startsWith("--comment-multiline-start-re=")) {
+        commentMultilineStartRe = arg.substring("--comment-multiline-start-re=".length());
+      } else if (arg.startsWith("--comment-multiline-end-re=")) {
+        commentMultilineEndRe = arg.substring("--comment-multiline-end-re=".length());
+      } else if (!arg.startsWith("--")) {
+        filename = arg;
+      } else {
+        System.err.println("Unknown argument: " + arg);
+        System.exit(1);
+      }
+    }
+
+    if (filename == null) {
       System.err.println(
-          "EntryReader sample program requires 1-3 args: filename [commentRegex [includeRegex]]");
+          "EntryReader sample program requires a filename argument and optional flags:");
+      System.err.println("  --comment-line-re=string");
+      System.err.println("  --comment-multiline-start-re=string");
+      System.err.println("  --comment-multiline-end-re=string");
+      System.exit(1);
+      throw new Error("unreachable");
+    }
+
+    if (commentLineRe != null && !RegexUtil.isRegex(commentLineRe)) {
+      System.err.println(
+          "Error parsing comment-line-re \""
+              + commentLineRe
+              + "\": "
+              + RegexUtil.regexError(commentLineRe));
       System.exit(1);
     }
-    final String filename = args[0];
-
-    final String commentRegex;
-    if (args.length >= 2) {
-      commentRegex = args[1];
-      if (!RegexUtil.isRegex(commentRegex)) {
-        System.err.println(
-            "Error parsing comment regex \""
-                + commentRegex
-                + "\": "
-                + RegexUtil.regexError(commentRegex));
-        System.exit(1);
-      }
-    } else {
-      commentRegex = null;
+    if (commentMultilineStartRe != null && !RegexUtil.isRegex(commentMultilineStartRe)) {
+      System.err.println(
+          "Error parsing comment-multiline-start-re \""
+              + commentMultilineStartRe
+              + "\": "
+              + RegexUtil.regexError(commentMultilineStartRe));
+      System.exit(1);
+    }
+    if (commentMultilineEndRe != null && !RegexUtil.isRegex(commentMultilineEndRe)) {
+      System.err.println(
+          "Error parsing comment-multiline-end-re \""
+              + commentMultilineEndRe
+              + "\": "
+              + RegexUtil.regexError(commentMultilineEndRe));
+      System.exit(1);
     }
 
-    final @Regex(1) String includeRegex;
-    if (args.length >= 3) {
-      @SuppressWarnings("regex:assignment") // about to be checked; flow isn't properly refining?
-      @Regex(1) String arg3 = args[2];
-      includeRegex = arg3;
-      if (!RegexUtil.isRegex(includeRegex, 1)) {
-        System.err.println(
-            "Error parsing include regex \""
-                + includeRegex
-                + "\": "
-                + RegexUtil.regexError(includeRegex));
-        System.exit(1);
-        throw new Error("unreachable");
-      }
-    } else {
-      includeRegex = null;
-    }
-
-    try (EntryReader reader = new EntryReader(filename, false, commentRegex, includeRegex)) {
+    try (EntryReader reader =
+        new EntryReader(
+            filename, false, commentLineRe, null, commentMultilineStartRe, commentMultilineEndRe)) {
       String line = reader.readLine();
       while (line != null) {
         System.out.printf("%s: %d: %s%n", reader.getFileName(), reader.getLineNumber(), line);
